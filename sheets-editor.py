@@ -265,21 +265,23 @@ class BatchPasteScreen(Screen):
     BINDINGS = [
         ("v", "paste", "Paste"),
         ("s", "save", "Save"),
+        ("c", "copy", "Copy"),
         ("escape", "cancel", "Cancel"),
     ]
 
-    def __init__(self, session, start, end):
+    def __init__(self, session, start, end, value_data=None):
         super().__init__()
         self.session = session
         self.start = start
         self.end = end
         self.total_lines = end - start + 1
+        self.value_data = value_data
         self.row_widgets = []
 
     def compose(self) -> ComposeResult:
         yield Static(
             f"Batch Paste Mode — {self.total_lines} rows selected "
-            "(V = Paste | S = Save | ESC Cancel)\n"
+            "(V = Paste | S = Save | C = Copy | ESC Cancel)\n"
         )
         
         self.scroll = VerticalScroll()
@@ -302,7 +304,8 @@ class BatchPasteScreen(Screen):
 
         yield Horizontal(
             Button("Paste from Clipboard", id="paste"),
-            Button("Save", id="save")
+            Button("Save", id="save"),
+            Button("Copy", id="copy"),
         )
 
         self.text_area = TextArea()
@@ -350,6 +353,9 @@ class BatchPasteScreen(Screen):
         self.app.pop_screen()
         self.app.refresh_main_list()
 
+    def action_copy(self):
+        pyperclip.copy(self.value_data)
+
     def action_cancel(self):
         self.app.notify("Batch cancelled.")
         self.app.pop_screen()
@@ -359,6 +365,8 @@ class BatchPasteScreen(Screen):
             self.action_paste()
         elif event.button.id == "save":
             self.action_save()
+        elif event.button.id == "copy":
+            self.action_copy()
 
 
 # =============================
@@ -393,6 +401,12 @@ class SheetApp(App, RangeValidator):
     def refresh_main_list(self):
         self.populate()
 
+    def parse_row_arg(self, raw_value):
+        raw_value = raw_value.strip()
+        if not raw_value.isdigit():
+            return None
+        return int(raw_value) - 1
+
     def on_input_submitted(self, event: Input.Submitted):
         cmd = event.value.strip()
         event.input.value = ""
@@ -418,8 +432,12 @@ class SheetApp(App, RangeValidator):
                 self.notify("Out of range")
 
         elif command in ("copy", "c") and len(parts) in (2, 3):
-            start = int(parts[1]) - 1
-            end = start if len(parts) == 2 else int(parts[2]) - 1
+            start = self.parse_row_arg(parts[1])
+            end = start if len(parts) == 2 else self.parse_row_arg(parts[2])
+
+            if start is None or end is None:
+                self.notify("Invalid row number. Use whole numbers, e.g. 'batch 10 20'.")
+                return
 
             error = self.validate_range(start, end)
             if error:
@@ -434,8 +452,12 @@ class SheetApp(App, RangeValidator):
             self.notify(f"Copied {end-start+1} row(s).")
 
         elif command in ("edit", "e") and len(parts) in (2, 3):
-            start = int(parts[1]) - 1
-            end = start if len(parts) == 2 else int(parts[2]) - 1
+            start = self.parse_row_arg(parts[1])
+            end = start if len(parts) == 2 else self.parse_row_arg(parts[2])
+
+            if start is None or end is None:
+                self.notify("Invalid row number. Use whole numbers, e.g. 'batch 10 20'.")
+                return
 
             error = self.validate_range(start, end)
             if error:
@@ -445,8 +467,12 @@ class SheetApp(App, RangeValidator):
             self.push_screen(BatchEditScreen(self.session, start, end))
 
         elif command in ("batch", "b") and len(parts) == 3:
-            start = int(parts[1]) - 1
-            end = int(parts[2]) - 1
+            start = self.parse_row_arg(parts[1])
+            end = self.parse_row_arg(parts[2])
+
+            if start is None or end is None:
+                self.notify("Invalid row number. Use whole numbers, e.g. 'batch 10 20'.")
+                return
 
             error = self.validate_range(start, end)
             if error:
@@ -457,8 +483,9 @@ class SheetApp(App, RangeValidator):
                 self.session.get_cell(i, 5)
                 for i in range(start, end + 1)
             ]
-            pyperclip.copy("\n".join(values))
-            self.push_screen(BatchPasteScreen(self.session, start, end))
+            value_data = "\n".join(values)
+            pyperclip.copy(value_data)
+            self.push_screen(BatchPasteScreen(self.session, start, end, value_data))
 
         else:
             self.notify("Unknown command")
